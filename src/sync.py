@@ -2,6 +2,7 @@
 import os
 import tempfile
 import argparse
+import pprint
 import logging
 import sys
 from collections import OrderedDict
@@ -9,11 +10,16 @@ from datetime import datetime, timedelta
 from typing import List, Set, Tuple
 from pathlib import Path
 
+import requests
 import yaml
 from tqdm import tqdm
 from git import Repo
 
 from client import UserApiClient
+
+logging.basicConfig(level=logging.INFO, filename="topology_sync.log")
+
+pp = pprint.PrettyPrinter(indent=4)
 
 
 def parse_args(argv: List[str] = sys.argv[1:]) -> argparse.Namespace:
@@ -36,7 +42,7 @@ def parse_args(argv: List[str] = sys.argv[1:]) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def get_all_osg_projects() -> List[Tuple[str, datetime]]:
+def get_all_osg_projects(client: UserApiClient) -> List[Tuple[str, datetime]]:
     """
     Obtain a list of all projects s.t. project name begins with "root.osg". The output list
     is in the format [("root.osg.example", datetime.datetime(2020, 3, 23, 18, 40, 46, 716576)), ...]
@@ -57,7 +63,7 @@ def get_all_osg_projects() -> List[Tuple[str, datetime]]:
             osg_projects.append(
                 (project,
                  datetime.strptime(project_data["creation_date"], date_fmt)))
-
+    
     return osg_projects
 
 
@@ -74,7 +80,7 @@ def get_topology_files(topology_projects_dir: Path) -> Set[str]:
     }
 
 
-def create_topology_file(project_name: str, dst: Path) -> None:
+def create_topology_file(client: UserApiClient, project_name: str, dst: Path) -> None:
     # get information about group
     project_info = client.get_group(project_name)["metadata"]
 
@@ -120,9 +126,24 @@ def commit(project: str, topology_repo_path: str) -> None:
         pass
 
 
-def create_pull_request() -> None:
-    pass
+def create_pull_request(gh_user: str, gh_token: str) -> None:
+    r = requests.post(
+        "https://api.github.com/repos/opensciencegrid/topology/pulls",
+        auth=requests.auth.HTTPBasicAuth(gh_user, gh_token),
+        headers={"Accept": "application/vnd.github.v3+json"},
+        json={
+            "base":
+            "master",
+            "head":
+            "{uname}:master".format(uname=gh_user),
+            "title":
+            "[initiated by topology-sync tool] topology files have been created/updated"
+            # TODO: add to body of pull request to provide more information
+        })
 
+    # ensure that we get response 201 (does this ever return anything else?? we need to check)
+    if r.status_code != 201:
+        pass
 
 if __name__ == "__main__":
     args = parse_args()
@@ -140,11 +161,12 @@ if __name__ == "__main__":
 
     # create client that will be used to connect to OSG Connect DB
     client = UserApiClient(
-        token_file_path=str(args.osgconnect_token_file_path))
+        token_file_path=Path(args.osgconnect_token_file_path))
 
     # get a list of all osg projects
-    all_projects = get_all_osg_projects()
-
+    all_projects = get_all_osg_projects(client)
+    pp.pprint(all_projects)
+    '''
     # filter for all projects added within the last 24 hours
     projects_added_in_last_day = get_all_projects_added_after_date(
         projects=all_projects, date=datetime.now() - timedelta(hours=24))
@@ -152,7 +174,11 @@ if __name__ == "__main__":
     # create a tmp dir, where we will clone official osg topology repo
     with tempfile.TemporaryDirectory() as tmpdir_name:
         topology_repo_path = Path(tmpdir_name) / "topology"
-        Repo.clone_from(remote, tmpdirname)
+        # TODO: figure out what error is raised when this fails
+        Repo.clone_from(
+            url="https://github.com/{username}/topology.git".format(
+                gh_username),
+            to_path=tmpdirname)
         repo = Repo(str(topology_repo_path))
 
         topology_files = get_topology_files(topology_repo_path / "projects")
@@ -168,4 +194,8 @@ if __name__ == "__main__":
 
                 commit(project, str(topology_repo_path))
 
-    # TODO: create pull request
+    # TODO: need to catch error if this fails
+    create_pull_request(gh_user, gh_token)
+    '''
+
+    print("done")
