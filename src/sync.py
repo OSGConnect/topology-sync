@@ -23,6 +23,13 @@ pp = pprint.PrettyPrinter(indent=4)
 
 
 def parse_args(argv: List[str] = sys.argv[1:]) -> argparse.Namespace:
+    """Parse command line arguments
+
+    :param argv: cli argument list, defaults to sys.argv[1:]
+    :type argv: List[str], optional
+    :return: object containing parsed arguments
+    :rtype: argparse.Namespace
+    """
     parser = argparse.ArgumentParser(description="Topology Sync Tool")
 
     parser.add_argument(
@@ -44,9 +51,14 @@ def parse_args(argv: List[str] = sys.argv[1:]) -> argparse.Namespace:
 
 def get_all_osg_projects(client: UserApiClient) -> List[Tuple[str, datetime]]:
     """
-    Obtain a list of all projects s.t. project name begins with "root.osg". The output list
-    is in the format [("root.osg.example", datetime.datetime(2020, 3, 23, 18, 40, 46, 716576)), ...]
+    Get all root.osg projects from the OSG Connect user database REST API
+
+    :param client: client used to make requests to OSG Connect REST API
+    :type client: UserApiClient
+    :return: Obtain a list of all projects s.t. project name begins with "root.osg". The output list is in the format [("root.osg.example", datetime.datetime(2020, 3, 23, 18, 40, 46, 716576)), ...]
+    :rtype: List[Tuple[str, datetime]]
     """
+
     # get all of the "root.osg" projects
     # NOTE: display_name is not garuanteed to be the same as project name
     date_fmt = "%Y-%b-%d %H:%M:%S.%f %Z"
@@ -63,24 +75,55 @@ def get_all_osg_projects(client: UserApiClient) -> List[Tuple[str, datetime]]:
             osg_projects.append(
                 (project,
                  datetime.strptime(project_data["creation_date"], date_fmt)))
-    
+
     return osg_projects
 
 
 def get_all_projects_added_after_date(
         projects: List[Tuple[str, datetime]],
         date: datetime) -> List[Tuple[str, datetime]]:
+    """
+    Filter for projects that were added only after a specified date
+
+    :param projects: project list obtained from function get_all_osg_projects(client: UserApiClient)
+    :type projects: List[Tuple[str, datetime]]
+    :param date: only projects added on or after the specified date will be returned
+    :type date: datetime
+    :return: subset of the list returned from function get_all_osg_projects(client: UserApiClient)
+    :rtype: List[Tuple[str, datetime]]
+    """
     return list(filter(lambda p: p[1] >= date, projects))
 
 
 def get_topology_files(topology_projects_dir: Path) -> Set[str]:
+    """
+    Obtain a set of topology files from the topology projects directory.
+    The set will contain the name of the topology files, but with the ".yaml"
+    at the end of the file name omitted. 
+
+    :param topology_projects_dir: path to topology repo "projects" directory
+    :type topology_projects_dir: Path
+    :return: set containing names of projects found in the "projects" directory
+    :rtype: Set[str]
+    """
     return {
         f.name.replace(".yaml", "")
         for f in topology_projects_dir.iterdir() if f.name.endswith(".yaml")
     }
 
 
-def create_topology_file(client: UserApiClient, project_name: str, dst: Path) -> None:
+def create_topology_file(client: UserApiClient, project_name: str,
+                         dst: Path) -> None:
+    """
+    For a given project, create a topology file.
+
+    :param client: client used to make requests to OSG Connect REST API 
+    :type client: UserApiClient
+    :param project_name: name of the project for which we are creating a topology file
+    :type project_name: str
+    :param dst: location where newly created topology file should be written 
+    :type dst: Path
+    """
     # get information about group
     project_info = client.get_group(project_name)["metadata"]
 
@@ -107,6 +150,16 @@ def create_topology_file(client: UserApiClient, project_name: str, dst: Path) ->
 
 
 def commit(project: str, topology_repo_path: str) -> None:
+    """
+    Commit and push changes made to topology repo. Changes refer to any 
+    new topology files added to the topology repo by the function
+    create_topology_file(client: UserApiClient, project_name: str, dst: Path)
+
+    :param project: name of the project which was added to the topology proj
+    :type project: str
+    :param topology_repo_path: path to topology repo
+    :type topology_repo_path: str
+    """
     os.chdir(topology_repo_path)
     repo = Repo(".")
     index = repo.index
@@ -126,14 +179,27 @@ def commit(project: str, topology_repo_path: str) -> None:
         pass
 
 
+# TODO: the facilitor who created a project needs to be added to the OSG Connect Database;
+# this information could be returned along with a group's information (when we query for a specific
+# group); once we have this information, we can include it in the commit message created by
+# this script
 def create_pull_request(gh_user: str, gh_token: str) -> None:
+    """
+    Create a pull request against the osg topology repo in github. gh_user must have
+    the topology repo forked in their github account. 
+
+    :param gh_user: user that will be issuing the pull request 
+    :type gh_user: str
+    :param gh_token: github token associated with gh_user
+    :type gh_token: str
+    """
     r = requests.post(
         "https://api.github.com/repos/opensciencegrid/topology/pulls",
         auth=requests.auth.HTTPBasicAuth(gh_user, gh_token),
         headers={"Accept": "application/vnd.github.v3+json"},
         json={
             "base":
-            "master",
+            "master",  # will break if the repo has main and not master 
             "head":
             "{uname}:master".format(uname=gh_user),
             "title":
@@ -141,9 +207,11 @@ def create_pull_request(gh_user: str, gh_token: str) -> None:
             # TODO: add to body of pull request to provide more information
         })
 
-    # ensure that we get response 201 (does this ever return anything else?? we need to check)
+    # TODO: ensure that we get response 201 (does this ever return anything else?? we need to check)
+    # else raise an error as the PR didn't succeed
     if r.status_code != 201:
         pass
+
 
 if __name__ == "__main__":
     args = parse_args()
@@ -165,13 +233,14 @@ if __name__ == "__main__":
 
     # get a list of all osg projects
     all_projects = get_all_osg_projects(client)
-    pp.pprint(all_projects)
-    '''
+
     # filter for all projects added within the last 24 hours
     projects_added_in_last_day = get_all_projects_added_after_date(
         projects=all_projects, date=datetime.now() - timedelta(hours=24))
 
-    # create a tmp dir, where we will clone official osg topology repo
+    # create a tmp dir, where we will clone gh_user's fork of osg topology repo;
+    # cloning topology into a tmp dir so that we get the latest changes locally every
+    # time this script runs
     with tempfile.TemporaryDirectory() as tmpdir_name:
         topology_repo_path = Path(tmpdir_name) / "topology"
         # TODO: figure out what error is raised when this fails
@@ -183,6 +252,8 @@ if __name__ == "__main__":
 
         topology_files = get_topology_files(topology_repo_path / "projects")
 
+        # for each project added in the last day, create topology file if it
+        # does not exist and commit to cloned topology repo
         for project in projects_added_in_last_day:
             project_name = project[0].replace("root.osg.", "")
 
@@ -196,6 +267,3 @@ if __name__ == "__main__":
 
     # TODO: need to catch error if this fails
     create_pull_request(gh_user, gh_token)
-    '''
-
-    print("done")
